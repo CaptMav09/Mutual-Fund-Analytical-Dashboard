@@ -1,0 +1,13 @@
+streamlit
+pandas
+numpy
+plotly
+python-dateutil
+requests
+beautifulsoup4
+textblob
+numpy-financial
+scipy
+yahooquery
+openpyxl
+mftool
