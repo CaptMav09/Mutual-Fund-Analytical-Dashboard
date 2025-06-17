@@ -11,3 +11,4 @@ scipy
 yahooquery
 openpyxl
 mftool
+Flask

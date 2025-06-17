@@ -32,6 +32,8 @@ from mftool import Mftool
 mf = Mftool()
 
 # Set page config
+from analysis.nav import analyze_historical_nav
+from analysis.volatility import run_monte_carlo_var, calculate_risk_metrics
 st.set_page_config(
     page_title="Mutual Fund Technical Analysis",
     page_icon=":bar_chart:",
@@ -120,176 +122,9 @@ st.info(
     """
 )
 
-# -----------------------------------------
-# Improved Monte Carlo Simulation function
-# -----------------------------------------
-def run_monte_carlo_var(nav_data: pd.DataFrame,
-                        scheme_name: str,
-                        num_simulations: int,
-                        num_days: int,
-                        confidence_level: float) -> dict:
-    """
-    Run a Monte Carlo simulation to estimate Value at Risk (VaR) for a mutual fund
-    using a log-return based geometric Brownian motion model.
-
-    Parameters
-    ----------
-    nav_data : pd.DataFrame
-        Historical data containing at least one 'nav' column for the mutual fund.
-    scheme_name : str
-        Name of the mutual fund scheme for display or labeling.
-    num_simulations : int
-        Number of simulation paths to generate.
-    num_days : int
-        Number of trading days to project into the future.
-    confidence_level : float
-        Confidence level at which to compute VaR (e.g., 0.95 for 95% VaR).
-
-    Returns
-    -------
-    dict
-        A dictionary containing:
-        - 'figure': A Plotly figure object showing the distribution of simulated final returns
-                    with a vertical line indicating the VaR threshold.
-        - 'var': The Value at Risk as a percentage (positive number). E.g., 5.0 means a 5% loss.
-        - 'expected_shortfall': The average loss in the worst (1 - confidence_level) tail.
-    """
-    try:
-        nav_data['nav'] = pd.to_numeric(nav_data['nav'], errors='coerce')
-        nav_data.dropna(subset=['nav'], inplace=True)
-
-        # Use log returns for more accurate simulation
-        nav_data['log_return'] = np.log(nav_data['nav'] / nav_data['nav'].shift(1))
-        log_returns = nav_data['log_return'].dropna()
-        daily_mean = log_returns.mean()
-        daily_vol = log_returns.std()
-        last_nav = nav_data['nav'].iloc[-1]
-
-        simulation_final_returns = []
-        for _ in range(num_simulations):
-            # Generate simulated log returns for num_days
-            simulated_log_returns = np.random.normal(daily_mean, daily_vol, num_days)
-            # The final price is calculated as the exponentiation of the cumulative log return
-            final_nav = last_nav * np.exp(simulated_log_returns.sum())
-            # Total return as a percentage
-            total_return = (final_nav / last_nav) - 1.0
-            simulation_final_returns.append(total_return)
-
-        simulation_final_returns = pd.Series(simulation_final_returns)
-
-        alpha = 1.0 - confidence_level  # tail probability
-        var_threshold = simulation_final_returns.quantile(alpha)
-        var_percent = -var_threshold * 100.0 if var_threshold < 0 else 0.0
-
-        # Expected Shortfall calculation: average loss in the tail
-        tail_losses = simulation_final_returns[simulation_final_returns <= var_threshold]
-        es_value = -tail_losses.mean() * 100.0 if len(tail_losses) > 0 else 0.0
-
-        # Create histogram figure using Plotly
-        fig = go.Figure()
-        fig.add_trace(go.Histogram(
-            x=simulation_final_returns * 100.0,
-            histnorm='probability',
-            nbinsx=50,
-            marker_color='#457B9D',
-            opacity=0.7,
-            name='Simulated Returns'
-        ))
-        fig.add_vline(
-            x=var_threshold * 100.0,
-            line_dash="dash",
-            line_color="red",
-            annotation_text=f"{confidence_level*100:.0f}% VaR<br>{var_percent:.2f}% loss",
-            annotation_position="top left"
-        )
-        fig.add_vline(
-            x=tail_losses.mean() * 100.0 if len(tail_losses) else 0.0,
-            line_dash="dot",
-            line_color="purple",
-            annotation_text=f"ES: {es_value:.2f}%",
-            annotation_position="bottom left"
-        )
-        fig.update_layout(
-            title=f"Monte Carlo Value at Risk (VaR) - {scheme_name}",
-            xaxis_title="Final Return (%)",
-            yaxis_title="Frequency (probability)",
-            template='plotly_white',
-            hovermode='x unified',
-            bargap=0.01
-        )
-
-        return {
-            'figure': fig,
-            'var': var_percent,
-            'expected_shortfall': es_value,
-        }
-    except Exception as e:
-        return {
-            'figure': None,
-            'var': None,
-            'expected_shortfall': None,
-            'error': str(e)
-        }
 
 scheme_names = {v: k for k, v in mf.get_scheme_codes().items()}
 
-def analyze_historical_nav(scheme_code: str, mf_instance: Mftool) -> tuple:
-    """
-    Analyze and prepare historical NAV data with robust date parsing.
-
-    Parameters
-    ----------
-    scheme_code : str
-        The mutual fund scheme code.
-    mf_instance : Mftool
-        An instance of the Mftool class for fetching data.
-    
-    Returns
-    -------
-    tuple
-        (DataFrame with processed historical NAV data, boolean indicating success or failure).
-    """
-    try:
-        nav_data = mf_instance.get_scheme_historical_nav(scheme_code, as_Dataframe=True)
-        if nav_data is None or nav_data.empty:
-            return None, False
-
-        nav_data = nav_data.reset_index()
-        
-        def try_parse_dates(date_series):
-            date_formats = ['%d-%m-%Y', '%Y-%m-%d', '%m-%d-%Y']
-            for fmt in date_formats:
-                try:
-                    return pd.to_datetime(date_series, format=fmt)
-                except:
-                    continue
-            try:
-                return pd.to_datetime(date_series, dayfirst=True)
-            except:
-                return None
-        
-        date_col = nav_data.columns[0]
-        nav_data['Date'] = try_parse_dates(nav_data[date_col])
-        
-        if nav_data['Date'].isna().any():
-            return None, False
-        
-        if date_col != 'Date':
-            nav_data = nav_data.drop(columns=[date_col])
-        
-        nav_data['NAV'] = pd.to_numeric(nav_data['nav'], errors='coerce')
-        nav_data.drop(columns=['nav'], inplace=True)
-
-        nav_data = nav_data.sort_values('Date').dropna()
-
-        nav_data['Daily_Returns'] = nav_data['NAV'].pct_change()
-        nav_data['Cumulative_Returns'] = (1 + nav_data['Daily_Returns']).cumprod() - 1
-        
-        return nav_data, True
-
-    except Exception as e:
-        st.error(f"Error in analyze_historical_nav: {str(e)}")
-        return None, False
 
 option = st.sidebar.selectbox(
     "Select an Action",
@@ -343,63 +178,6 @@ if option == "View Available Schemes":
     **Common Growth Options:**
     - IDCW (Income Distribution cum Capital Withdrawal): Mutual fund option that provides periodic payouts from profits and capital appreciation.
     - Direct Plan: Mutual fund plan with no intermediary commissions, offering lower expense ratios and potentially higher returns.
-    - Regular Plan: Mutual fund plan with distributor involvement, leading to higher expenses but offering advisory services.
-    """)
-
-
-elif option == "Scheme details":
-    st.markdown("""<h2 style="color:#FFFFFF;">Scheme Details</h2>""", unsafe_allow_html=True)
-    search_term = st.text_input("Enter AMC Name", key="scheme_details_search")
-    filtered_schemes = {k: v for k, v in scheme_names.items() if search_term.lower() in k.lower()}
-    if not filtered_schemes:
-        st.warning("No schemes found matching your search.")
-    else:
-        selected_scheme = st.selectbox("Select A Scheme", list(filtered_schemes.keys()), key="scheme_details_select")
-        scheme_code = scheme_names[selected_scheme]
-        try:
-            scheme_info = mf.get_scheme_details(scheme_code)
-            if not scheme_info:
-                st.error("Unable to fetch scheme details. Please try again.")
-            else:
-                fund_house = scheme_info.get("fund_house", "N/A")
-                scheme_type = scheme_info.get("scheme_type", "N/A")
-                scheme_category = scheme_info.get("scheme_category", "N/A")
-                scheme_code_display = scheme_info.get("scheme_code", "N/A")
-                scheme_name_display = scheme_info.get("scheme_name", "N/A")
-                start_date_info = scheme_info.get("scheme_start_date", {})
-                start_date = start_date_info.get("date", "N/A")
-                nav = start_date_info.get("nav", "N/A")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Fund House", fund_house)
-                    st.metric("Scheme Type", scheme_type)
-                with col2:
-                    st.metric("Scheme Category", scheme_category)
-                    st.metric("Scheme Code", scheme_code_display)
-                with col3:
-                    st.metric("Scheme Name", scheme_name_display)
-                    st.metric("Launch Date", start_date)
-                    st.metric("Initial NAV", nav)
-        except Exception as e:
-            st.error(f"Error fetching scheme details: {str(e)}")
-
-
-elif option == "Historical NAV":
-    st.markdown("""<h2 style="color:#FFFFFF;">Historical NAV Analysis</h2>""", unsafe_allow_html=True)
-    selected_scheme = st.selectbox("Select a Scheme", list(scheme_names.keys()), key="historical_nav_scheme")
-    scheme_code = scheme_names[selected_scheme]
-    nav_data, success = analyze_historical_nav(scheme_code, mf)
-    if not success or nav_data is None:
-        st.warning("Historical NAV data not available for the selected scheme.")
-    else:
-        col1, col2 = st.columns(2)
-        with col1:
-            start_date = st.date_input("Start Date", nav_data['Date'].min(), key="hist_nav_start")
-        with col2:
-            end_date = st.date_input("End Date", nav_data['Date'].max(), key="hist_nav_end")
-        mask = (nav_data['Date'].dt.date >= start_date) & (nav_data['Date'].dt.date <= end_date)
-        filtered_data = nav_data.loc[mask]
-        col1, col2 = st.columns(2)
         with col1:
             csv_filtered = filtered_data.to_csv(index=False)
             st.download_button(label="📥 Download Filtered Data", data=csv_filtered, file_name=f"{selected_scheme}_filtered_nav_data.csv", mime="text/csv")
@@ -820,31 +598,6 @@ def calculate_sip_returns(monthly_investment, years, annual_return, inflation_ra
 
     return total_invested, sip_absolute_returns, sip_inflation_adjusted, break_even_months / 12, (xirr_value * 100 if xirr_value else 0)
 
-def calculate_risk_metrics(returns: pd.Series) -> tuple:
-    """
-    Calculate fundamental risk metrics given a series of returns.
-    
-    Parameters
-    ----------
-    returns : Series
-        A pandas Series containing daily return values.
-    
-    Returns
-    -------
-    tuple
-        (Sharpe Ratio, Sortino Ratio, Beta)
-    """
-    risk_free_rate = 0.06  
-    excess_returns = returns - risk_free_rate / 252
-
-    sharpe = np.sqrt(252) * np.mean(excess_returns) / np.std(returns)
-
-    downside_returns = returns[returns < 0]
-    sortino = np.sqrt(252) * np.mean(excess_returns) / np.std(downside_returns) if len(downside_returns) > 0 else np.nan
-
-    beta = 1.0
-
-    return sharpe, sortino, beta
 
 def create_chart(x, y_values, labels, title, x_label, y_label):
     fig = go.Figure()
