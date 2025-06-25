@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Monte Carlo Simulation</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <h1>Monte Carlo Simulation</h1>
+    <p>VaR: {{ var }}%</p>
+    <p>Expected Shortfall: {{ es }}%</p>
+    {{ graph_html|safe }}
+</body>
+</html>

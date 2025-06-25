@@ -115,6 +115,16 @@ mftool
 
 4. **Deploy on Streamlit Cloud (Optional):**  
    Ensure the repository contains the `requirements.txt` file so that Streamlit Cloud can automatically install dependencies.
+### Running the Flask App
+
+To start the Flask server run:
+
+```bash
+python flask_app.py
+```
+
+Then open http://localhost:5000 in your browser.
+
 
 ## Usage Guide
 
